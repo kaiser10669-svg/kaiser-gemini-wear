@@ -1,7 +1,7 @@
 [center][size=6][b][color=#FFD700]👑 KAISER GEMINI & ACCOUNT SUITE 👑[/color][/b][/size]
 [size=4][b][color=#00F0FF]Перенос Google-аккаунтов (Gmail), вход после смены пароля и активация Gemini на Xiaomi Watch 5[/color][/b][/size]
 [size=3][color=#00E676][b]БЕЗ сброса настроек (Zero-Reset) • Добавление 2-го и 3-го аккаунта • Обновление токена • Gemini на русском[/b][/color][/size]
-[b]Автор разработки и метода:[/b] [color=#FFD700][b]Kaiser Dev[/b][/color] | [url=https://github.com/kaiser10669-svg/kaiser-gemini-wear][b]GitHub Проекта[/b][/url][/center]
+[b]Автор разработки и метода:[/b] [color=#FFD700][b]Kaiser Dev[/b][/color] | [url=https://github.com/kaiser10669-svg/kaiser-gemini-wear][b]GitHub Репозиторий[/b][/url] | [url=https://kaiser10669-svg.github.io/kaiser-gemini-wear/][b]Web-версия гайда[/b][/url] | [url=https://github.com/kaiser10669-svg/kaiser-gemini-wear/blob/main/%D0%98%D0%9D%D0%A1%D0%A2%D0%A0%D0%A3%D0%9A%D0%A6%D0%98%D0%AF_%D0%9F%D0%95%D0%A0%D0%95%D0%9D%D0%9E%D0%A1_GOOGLE_%D0%90%D0%9A%D0%9A%D0%90%D0%A3%D0%9D%D0%A2%D0%90.txt][b]Текстовая инструкция (TXT)[/b][/url][/center]
 
 [hr]
 
@@ -41,6 +41,7 @@
 [*] [b]activate_gemini.py[/b] — скрипт мгновенной активации голосового ассистента Gemini.
 [*] [b]run_gemini_activation.bat[/b] — запуск активации Gemini.
 [*] [b]tools/[/b] — автономный портативный ADB (ничего стороннего на ПК ставить не требуется).
+[*] [b]ИНСТРУКЦИЯ_ПЕРЕНОС_GOOGLE_АККАУНТА.txt[/b] — оффлайн-мануал.
 [/list]
 [/spoiler]
 
@@ -122,6 +123,8 @@
 
 [list]
 [*] [b]GitHub репозиторий проекта:[/b] [url=https://github.com/kaiser10669-svg/kaiser-gemini-wear]https://github.com/kaiser10669-svg/kaiser-gemini-wear[/url]
+[*] [b]Интерактивный Web-гайд (Pages):[/b] [url=https://kaiser10669-svg.github.io/kaiser-gemini-wear/]https://kaiser10669-svg.github.io/kaiser-gemini-wear/[/url]
+[*] [b]Текстовая инструкция (TXT на GitHub):[/b] [url=https://github.com/kaiser10669-svg/kaiser-gemini-wear/blob/main/%D0%98%D0%9D%D0%A1%D0%A2%D0%A0%D0%A3%D0%9A%D0%A6%D0%98%D0%AF_%D0%9F%D0%95%D0%A0%D0%95%D0%9D%D0%9E%D0%A1_GOOGLE_%D0%90%D0%9A%D0%9A%D0%90%D0%A3%D0%9D%D0%A2%D0%90.txt]Открыть ИНСТРУКЦИЯ_ПЕРЕНОС_GOOGLE_АККАУНТА.txt[/url]
 [*] [b]Готовый ZIP-архив со всеми утилитами:[/b] [i]Xiaomi_Watch5_Gemini_GoogleAccount_Pack.zip[/i] (13.7 МБ)
 [/list]
 
