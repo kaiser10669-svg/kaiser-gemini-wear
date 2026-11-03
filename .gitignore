@@ -1,0 +1,9 @@
+# Temporary files
+*.log
+*.tmp
+__pycache__/
+*.pyc
+
+# Ignore heavy dumps and archives
+*.zip
+*.tar.gz

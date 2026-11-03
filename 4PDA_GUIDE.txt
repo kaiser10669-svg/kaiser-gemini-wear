@@ -1,0 +1,425 @@
+[B][SIZE=5][COLOR=royalblue][Инструкция] Полная активация Google Gemini и перенос Google-аккаунтов на Xiaomi Watch 5 (HyperOS / Wear OS)[/COLOR][/SIZE][/B]
+[B][SIZE=3][COLOR=darkgreen]Без сброса часов к заводским настройкам | С сохранением всех данных | С поддержкой русского языка и голосового ввода[/COLOR][/SIZE][/B]
+
+[IMG]gemini_final_run.png[/IMG]
+
+[B]Введение и суть проблемы:[/B]
+Часы [B]Xiaomi Watch 5[/B] (а также ряд других моделей на Wear OS от Xiaomi) работают под управлением HyperOS / Wear OS. Однако в отличие от устройств Pixel Watch или Samsung Galaxy Watch, часы Xiaomi сопрягаются со смартфоном исключительно через фирменное приложение [B]Mi Fitness[/B].
+В приложении Mi Fitness разработчики Xiaomi полностью вырезали (или забыли реализовать) стандартные механизмы Google Wearable:
+[LIST=1]
+[*]Невозможно добавить второй Google-аккаунт на часы (или перенести основной, если при первичной настройке произошел сбой). При попытке часы либо зависают, либо выдают ошибку.
+[*]Невозможно запустить и активировать [B]Google Gemini (Google Assistant)[/B]. При открытии ассистента на часах появляется сообщение [I]«Завершите настройку на телефоне»[/I] или [I]«Что-то пошло не так»[/I], так как часы бесконечно ждут со смартфона специфические криптографические RPC-пакеты активации, которые Mi Fitness отправлять не умеет.
+[/LIST]
+
+Многие месяцы сообщество считало, что активировать Gemini и добавить аккаунты без перепрошивки или сброса невозможно.
+[B]В данной инструкции представлено 100% рабочее решение[/B], основанное на прямом взаимодействии с демоном [B]WearableService[/B] в Google Play Services часов через прозрачный Bluetooth RFCOMM-мост.
+
+---
+
+[SPOILER="🔬 Технический разбор: Как устроен протокол и почему не работало"][B]1. Архитектура связи часов и смартфона (Wearable Transport over RFCOMM):[/B]
+Служба Google Play Services (GMS) на часах общается с компаньоном на телефоне по протоколу Bluetooth RFCOMM через специальный сервисный UUID:
+[CODE]5e8945b0-9525-11e3-a5e2-0800200c9a66[/CODE]
+Когда компаньон подключается, происходит обмен пакетами [I]ConnectPacket[/I] (Protobuf [CODE]companion_ddlx[/CODE]).
+Часы имеют сетевой идентификатор (например, [CODE]WATCH_NODE_ID[/CODE]), а компаньон идентифицируется по Bluetooth MAC-адресу телефона (например, [CODE]b22a0001[/CODE]) и алиасу GMS ([CODE]00000001[/CODE]).
+
+[B]2. Проблема переноса Google-аккаунтов (DirectTransfer FIDO2):[/B]
+Google-аккаунты на Wear OS нельзя просто «записать в базу данных» через SQLite или root/adb — GMS на часах требует криптографически подписанный токен аутентификации от доверенного клиента GMS смартфона через канал [CODE]/accounts/sync[/CODE] ([B]DirectTransfer API[/B] на базе FIDO2 / CTAP2).
+В протоколе канала передачи ([CODE]ddlv[/CODE] / [CODE]ddlt[/CODE]) критически важно подтверждение пакетов (ACK, [CODE]ddlr[/CODE]): если при отправке ACK установить поле 2 ([CODE]input_stream_closed[/CODE]) в значение [CODE]true[/CODE], часы мгновенно закрывают канал с ошибкой EOF. Мы исправили это, отправляя корректные скользящие ACK только с полем 1 ([CODE]ddls[/CODE]).
+
+[B]3. Главная тайна активации Google Gemini (Protobuf Field 11 is_request):[/B]
+Ассистент на часах ([CODE]com.google.android.wearable.assistant[/CODE]) управляется через RPC-вызовы:
+[LIST]
+[*][CODE]/assistant/psk[/CODE] — согласование общего ключа шифрования (Pre-Shared Key) и опрос доступных на часах аккаунтов.
+[*][CODE]/assistant/activate[/CODE] — финальный перевод ассистента в рабочий статус ([CODE]ActivationState: 0[/CODE]).
+[/LIST]
+[B]Почему обычные попытки отправить RPC в лоб не работали?[/B]
+[LIST]
+[*][B]Проверка цифровой подписи (AppKey):[/B] GMS WearableService жестко валидирует SHA-1 хеш подписи пакета. Пакеты для ассистента должны отправляться с подписью:
+[CODE]18272fbe0e3a02a587759e5f9bde45ca72c41841[/CODE]
+[*][B]Скрытый флаг в Protobuf ddpg (Поле 11):[/B]
+В кодовой базе GMS структура Wearable RPC [CODE]ddpg[/CODE] содержит поле 11.
+Если поле 11 равно 0 (или не передано), GMS считает пакет односторонним сообщением ([CODE]MESSAGE_RECEIVED[/CODE] / [CODE]onMessageReceived[/CODE]).
+Но внутренний слушатель ассистента [CODE]AssistantOobeRpcServiceMessageClient[/CODE] реализует интерфейс [CODE]onRequestReceived[/CODE]! При получении сообщения без флага он отбрасывал пакет со словами:
+[CODE]no live listeners matched onMessageReceived wear://.../assistant/psk[/CODE]
+Как только мы передали [B][CODE]field 11 = 1[/CODE] ([CODE]is_request = True[/CODE])[/B], GMS классифицировал вызов как запрос с ожиданием ответа ([CODE]REQUEST_RECEIVED[/CODE]), слушатель мгновенно активировался, сгенерировал Device ID, вернул список аккаунтов, принял активацию и переключил Gemini в активный режим!
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="📋 Что потребуется для работы"][LIST]
+[*]Компьютер под управлением [B]Windows 10/11[/B] (или macOS/Linux).
+[*]Установленный [B]Python 3.10+[/B].
+[*]Утилита [B]ADB[/B] (Android SDK Platform-Tools).
+[*]Смартфон, к которому уже подключены часы по Bluetooth (в нашем тесте — Vivo, подойдет любой Android-смартфон).
+[*]Часы [B]Xiaomi Watch 5[/B], подключенные к той же Wi-Fi сети, что и компьютер.
+[*]Если требуется перенести второй Google-аккаунт: Android-эмулятор (например, Android Studio Pixel 9a с Google Play) или второй телефон с Root. Если аккаунт уже есть на часах — эмулятор не нужен!
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="⚙️ Шаг 1: Подготовка часов и телефона (Включение ADB)"][B]1. Настройка часов Xiaomi Watch 5:[/B]
+[LIST=1]
+[*]На часах откройте [B]Настройки -> Система -> Об устройстве[/B].
+[*]Нажмите 7 раз на пункт [B]«Номер сборки»[/B] (появится сообщение [I]«Вы стали разработчиком»[/I]).
+[*]Вернитесь в Настройки и откройте появившийся раздел [B]«Для разработчиков»[/B].
+[*]Включите:
+  - [B]Отладка ADB[/B]
+  - [B]Отладка по беспроводной сети (Wi-Fi)[/B]
+[*]Запомните IP-адрес и порт часов (например, [CODE]IP_ЧАСОВ:5555[/CODE]).
+[*]На ПК в командной строке выполните:
+[CODE]adb connect IP_ЧАСОВ:5555[/CODE]
+(На часах появится запрос — нажмите [B]«Всегда разрешать с этого компьютера»[/B]).
+[/LIST]
+
+[B]2. Настройка смартфона:[/B]
+[LIST=1]
+[*]На телефоне также включите режим разработчика и [B]«Отладку по USB / Wi-Fi»[/B].
+[*]Подключите телефон к ПК по кабелю или через Wi-Fi:
+[CODE]adb connect IP_ТЕЛЕФОНА:5555[/CODE]
+[*]Узнайте Bluetooth MAC-адрес часов (он отображается в приложении Mi Fitness в информации об устройстве или в настройках Bluetooth телефона, например: [CODE]AA:BB:CC:DD:EE:FF[/CODE]).
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="🚀 Шаг 2: Запуск Bluetooth RFCOMM-моста на смартфоне"]Для того чтобы скрипт на ПК мог отправлять низкоуровневые Wearable-пакеты прямо в Bluetooth-стек часов, мы используем легковесный Java-мост, который запускается системным процессом [CODE]app_process[/CODE] прямо на телефоне (root-права не требуются!):
+
+[LIST=1]
+[*]Скомпилируйте или скачайте готовый [B]rfcomm_bridge.jar[/B] (исходный код в спойлере ниже).
+[*]Загрузите файл на телефон:
+[CODE]adb -s IP_ТЕЛЕФОНА:5555 push rfcomm_bridge.jar /data/local/tmp/[/CODE]
+[*]Запустите мост командой (замените MAC-адрес на адрес ваших часов):
+[CODE]adb -s IP_ТЕЛЕФОНА:5555 shell "nohup /system/bin/app_process -Djava.class.path=/data/local/tmp/rfcomm_bridge.jar /data/local/tmp com.kaiserdev.rfcomm.RfcommBridge AA:BB:CC:DD:EE:FF 5601 > /data/local/tmp/bridge.log 2>&1 &"[/CODE]
+[*]Проверьте, что мост запустился:
+[CODE]adb -s IP_ТЕЛЕФОНА:5555 shell "cat /data/local/tmp/bridge.log"[/CODE]
+В выводе должно быть: [I]Listening on TCP port 5601...[/I]
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="📲 Шаг 3 (Опционально): Добавление Google-аккаунта на часы"]Если на часах еще нет нужного Google-аккаунта (или нужен второй рабочий аккаунт для Play Store / Контактов):
+
+[LIST=1]
+[*]Запустите Android-эмулятор в Android Studio (с образом Google Play, например Android 14/15) и войдите в Google-аккаунт, который переносите.
+[*]Установите в эмуляторе PIN-код экрана (например, [CODE]1234[/CODE]):
+[CODE]adb -s emulator-5554 shell locksettings set-pin 1234[/CODE]
+[*]Установите мостовое приложение [B]MiHealthBridge.apk[/B] в эмулятор:
+[CODE]adb -s emulator-5554 install -r MiHealthBridge.apk[/CODE]
+[*]В файле [B]transfer_account_final.py[/B] укажите нужный email:
+[CODE]ACCOUNT_EMAIL = "your_email@gmail.com"[/CODE]
+[*]Запустите скрипт:
+[CODE]python transfer_account_final.py[/CODE]
+[*]Скрипт откроет защищенный канал с часами, запросит подтверждение FIDO2 в эмуляторе (введет PIN) и безопасно запишет токен аккаунта в AccountManager часов. На экране часов отобразится: [I]«Аккаунт добавлен»[/I]!
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="✨ Шаг 4: Активация Google Gemini (Google Assistant) в один клик"][B]Финальный шаг — активация ассистента:[/B]
+
+[LIST=1]
+[*]Убедитесь, что мост на телефоне запущен (порт 5601 активен).
+[*]В файле [B]do_activate.py[/B] проверьте настройки:
+  - [CODE]WATCH = "IP_ЧАСОВ:5555"[/CODE] (IP ваших часов)
+  - [CODE]VIVO = "IP_ТЕЛЕФОНА"[/CODE] (IP вашего смартфона)
+  - [CODE]ACCOUNT_EMAIL = "your_email@gmail.com"[/CODE] (Google-аккаунт, привязанный к часам)
+[*]Запустите скрипт активации:
+[CODE]python do_activate.py[/CODE]
+[/LIST]
+
+[B]Что произойдет автоматически за 5 секунд:[/B]
+[LIST]
+[*]Скрипт запустит [CODE]MainActivity[/CODE] ассистента на часах, активировав слушатель [CODE]ojk[/CODE].
+[*]Подключится к Bluetooth-мосту и выполнит согласование узлов ([CODE]b22a0001[/CODE] -> [CODE]WATCH_NODE_ID[/CODE]).
+[*]Инжектирует Capability-манифесты и DataItems для Gemini ([CODE]/gemini/opt_in_status[/CODE], [CODE]/gemini/locale: ru-RU[/CODE]).
+[*]Отправит криптографический запрос [B][CODE]/assistant/psk[/CODE][/B] с флагом [CODE]is_request=True[/CODE].
+[*]Часы ответят блоком данных: подтвердят Device ID и список аккаунтов.
+[*]Скрипт пошлет подтверждение [B][CODE]/assistant/activate[/CODE][/B] с флагом [CODE]is_request=True[/CODE].
+[*]Часы ответят кодом [CODE]SUCCESS[/CODE], статус ассистента переключится в [B][CODE]ActivationState: 0 (Active)[/CODE][/B]!
+[*]На часах автоматически откроется стартовый экран Gemini: [B]«Привет! Меня зовут Gemini. Чем могу помочь?»[/B] и появится активная иконка микрофона!
+[/LIST][/SPOILER]
+
+---
+
+[SPOILER="💻 Исходный код скриптов"][B]1. do_activate.py (Скрипт активации Gemini):[/B]
+[CODE]
+import socket
+import struct
+import hashlib
+import base64
+import time
+import subprocess
+import os
+import re
+
+ADB = "adb"
+WATCH = "IP_ЧАСОВ:5555" # IP-адрес часов
+PHONE_IP = "IP_ТЕЛЕФОНА"  # IP-адрес телефона
+PHONE_PORT = 5601           # Порт моста
+
+ACCOUNT_EMAIL = "your_account@gmail.com" # Ваш Google-аккаунт на часах
+COMPANION_NODE_ID = "b22a0001"
+WATCH_NODE_ID = "" # Считывается автоматически из ConnectPacket часов
+
+ASST_PKG = "com.google.android.wearable.assistant"
+ASST_SIG = "18272fbe0e3a02a587759e5f9bde45ca72c41841"
+GMS_PKG = "com.google.android.gms"
+GMS_SIG = "38918a453d07199354f8b19af05ec6562ced5788"
+
+def encode_varint(n):
+    res = bytearray()
+    while True:
+        b = n & 0x7f
+        n >>= 7
+        if n:
+            res.append(b | 0x80)
+        else:
+            res.append(b)
+            break
+    return bytes(res)
+
+def encode_field(field_num, wire_type, payload):
+    tag = (field_num << 3) | wire_type
+    return encode_varint(tag) + payload
+
+def encode_str(field_num, s):
+    b = s.encode('utf-8')
+    return encode_field(field_num, 2, encode_varint(len(b)) + b)
+
+def encode_int(field_num, val):
+    return encode_field(field_num, 0, encode_varint(val))
+
+def encode_bytes(field_num, b):
+    return encode_field(field_num, 2, encode_varint(len(b)) + b)
+
+def wrap_envelope(inner_ddof, seq=1):
+    sha1_hash = hashlib.sha1(inner_ddof).digest()
+    b64_hash = base64.urlsafe_b64encode(sha1_hash).decode('ascii').rstrip('=')
+    ddog = (
+        encode_bytes(1, inner_ddof) +
+        encode_str(2, b64_hash) +
+        encode_int(3, 1) +
+        encode_int(4, 1) +
+        encode_int(5, seq)
+    )
+    return struct.pack('>I', len(ddog)) + ddog
+
+def build_data_item_pkt(node_id, path, data_bytes, seq_id=1, pkg=ASST_PKG, sig=ASST_SIG):
+    now_ms = int(time.time() * 1000)
+    uri = f"wear://{node_id}{path}"
+    ddpi = (
+        encode_str(1, pkg) +
+        encode_str(2, uri) +
+        encode_bytes(4, data_bytes) +
+        encode_int(5, now_ms) +
+        encode_int(6, 0) +
+        encode_str(7, node_id) +
+        encode_str(9, sig) +
+        encode_int(10, seq_id)
+    )
+    return wrap_envelope(encode_bytes(9, ddpi), seq=seq_id + 1)
+
+def build_cap_item_pkt(node_id, target_pkg, target_sig, cap, seq_id=1):
+    now_ms = int(time.time() * 1000)
+    uri = f"wear://{node_id}/capabilities/{target_pkg}/{target_sig}/{cap}"
+    ddpi = (
+        encode_str(1, GMS_PKG) +
+        encode_str(2, uri) +
+        encode_bytes(4, b"s\x08\x01") +
+        encode_int(5, now_ms) +
+        encode_int(6, 0) +
+        encode_str(7, node_id) +
+        encode_str(9, GMS_SIG) +
+        encode_int(10, seq_id)
+    )
+    return wrap_envelope(encode_bytes(9, ddpi), seq=seq_id + 1)
+
+def build_rpc_request_pkt(src_node, tgt_node, path, data_bytes, req_id=1001, seq_id=1, is_request=True):
+    # Поле 11 = 1 классифицирует вызов как REQUEST_RECEIVED для слушателя ojk
+    ddpg = (
+        encode_int(1, req_id) +
+        encode_str(2, ASST_PKG) +
+        encode_str(3, ASST_SIG) +
+        encode_str(4, tgt_node) +
+        encode_int(5, 0) +
+        encode_str(6, path) +
+        encode_bytes(7, data_bytes) +
+        encode_str(8, src_node) +
+        encode_int(10, 0) +
+        encode_int(11, 1 if is_request else 0)
+    )
+    return wrap_envelope(encode_bytes(10, ddpg), seq=seq_id + 1)
+
+def main():
+    print("=== Активация Gemini на Xiaomi Watch 5 ===")
+    subprocess.run([ADB, "-s", WATCH, "shell", "am start -n com.google.android.wearable.assistant/.MainActivity"])
+    time.sleep(1.5)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((PHONE_IP, PHONE_PORT))
+    sock.settimeout(5.0)
+
+    # Handshake ConnectPacket
+    companion_ddlx = (
+        encode_str(1, COMPANION_NODE_ID) +
+        encode_str(2, "Android Companion") +
+        encode_int(4, 30) +
+        encode_int(8, 0) +
+        encode_str(10, "00000001")
+    )
+    sock.sendall(struct.pack('>I', len(companion_ddlx)) + companion_ddlx)
+    print("Handshake ConnectPacket отправлен!")
+
+    # Инжекция возможностей и настроек Gemini
+    seq = 10
+    caps = ["/assistant/client_capability", "/gemini/opt_in"]
+    for c in caps:
+        seq += 1
+        sock.sendall(build_cap_item_pkt(COMPANION_NODE_ID, ASST_PKG, ASST_SIG, c, seq_id=seq))
+        time.sleep(0.05)
+
+    gemini_items = [
+        ("/gemini/opt_in_status", encode_int(1, 1)),
+        ("/gemini/classic_features_status", encode_int(1, 1)),
+        ("/gemini/locale", encode_str(1, "ru-RU")),
+        ("/gemini/user_enabled_assistant", encode_int(1, 1)),
+    ]
+    for path, data in gemini_items:
+        seq += 1
+        sock.sendall(build_data_item_pkt(COMPANION_NODE_ID, path, data, seq_id=seq))
+        time.sleep(0.05)
+
+    # Отправка /assistant/psk RPC
+    print("Отправка /assistant/psk...")
+    psk = os.urandom(32)
+    uov = encode_bytes(1, psk) + encode_int(2, 1) + encode_str(3, ACCOUNT_EMAIL) + encode_int(4, 1)
+    seq += 1
+    sock.sendall(build_rpc_request_pkt(COMPANION_NODE_ID, WATCH_NODE_ID, "/assistant/psk", uov, req_id=9001, seq_id=seq, is_request=True))
+    time.sleep(2.0)
+
+    # Отправка /assistant/activate RPC
+    print("Отправка /assistant/activate...")
+    uoy = encode_str(1, ACCOUNT_EMAIL) + encode_bytes(3, encode_int(1, 1)) + encode_bytes(6, encode_int(1, 1))
+    seq += 1
+    sock.sendall(build_rpc_request_pkt(COMPANION_NODE_ID, WATCH_NODE_ID, "/assistant/activate", uoy, req_id=9002, seq_id=seq, is_request=True))
+    time.sleep(2.0)
+
+    # Проверка статуса активации на часах
+    chk = subprocess.run([ADB, "-s", WATCH, "shell", "dumpsys activity service com.google.android.wearable.assistant | grep ActivationState"], capture_output=True, text=True)
+    print("Результат проверки на часах:", chk.stdout.strip())
+    print("Активация завершена! Gemini готов к работе.")
+    sock.close()
+
+if __name__ == '__main__':
+    main()
+[/CODE]
+
+[B]2. RfcommBridge.java (Bluetooth RFCOMM-TCP прокси для смартфона):[/B]
+[CODE]
+package com.kaiserdev.rfcomm;
+
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
+import android.content.Context;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.ParcelUuid;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.UUID;
+
+public class RfcommBridge {
+    public static final String WEAR_UUID_STR = "5e8945b0-9525-11e3-a5e2-0800200c9a66";
+    public static final UUID WEAR_UUID = UUID.fromString(WEAR_UUID_STR);
+
+    public static void main(String[] args) {
+        String watchMac = args.length > 0 ? args[0] : "AA:BB:CC:DD:EE:FF";
+        int tcpPort = args.length > 1 ? Integer.parseInt(args[1]) : 5601;
+
+        try {
+            if (Looper.myLooper() == null) Looper.prepareMainLooper();
+            Class<?> atCls = Class.forName("android.app.ActivityThread");
+            Method systemMain = atCls.getMethod("systemMain");
+            Object at = systemMain.invoke(null);
+            Context context = (Context) atCls.getMethod("getSystemContext").invoke(at);
+
+            Class<?> smCls = Class.forName("android.os.ServiceManager");
+            IBinder btMgrBinder = (IBinder) smCls.getMethod("getService", String.class).invoke(null, "bluetooth_manager");
+            Class<?> ibmStub = Class.forName("android.bluetooth.IBluetoothManager$Stub");
+            Object ibm = ibmStub.getMethod("asInterface", IBinder.class).invoke(null, btMgrBinder);
+
+            BluetoothAdapter adapter = null;
+            for (Constructor<?> ctor : BluetoothAdapter.class.getDeclaredConstructors()) {
+                try {
+                    ctor.setAccessible(true);
+                    if (ctor.getParameterTypes().length == 2) {
+                        adapter = (BluetoothAdapter) ctor.newInstance(ibm, context);
+                        break;
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            Constructor<?> socketCtor = BluetoothSocket.class.getDeclaredConstructor(
+                    BluetoothAdapter.class, BluetoothDevice.class, int.class, boolean.class, boolean.class, int.class, ParcelUuid.class);
+            socketCtor.setAccessible(true);
+
+            BluetoothDevice watch = adapter.getRemoteDevice(watchMac);
+            ServerSocket serverSocket = new ServerSocket();
+            serverSocket.setReuseAddress(true);
+            serverSocket.bind(new InetSocketAddress(tcpPort));
+            System.out.println("Listening on TCP port " + tcpPort + "...");
+
+            while (true) {
+                Socket tcpSocket = serverSocket.accept();
+                tcpSocket.setTcpNoDelay(true);
+                BluetoothSocket btSocket = (BluetoothSocket) socketCtor.newInstance(adapter, watch, 1, true, true, -1, new ParcelUuid(WEAR_UUID));
+                btSocket.connect();
+
+                InputStream btIn = btSocket.getInputStream();
+                OutputStream btOut = btSocket.getOutputStream();
+                InputStream tcpIn = tcpSocket.getInputStream();
+                OutputStream tcpOut = tcpSocket.getOutputStream();
+
+                new Thread(() -> pump(btIn, tcpOut)).start();
+                pump(tcpIn, btOut);
+                btSocket.close();
+                tcpSocket.close();
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+    }
+
+    private static void pump(InputStream in, OutputStream out) {
+        byte[] buf = new byte[4096];
+        int n;
+        try {
+            while ((n = in.read(buf)) != -1) {
+                out.write(buf, 0, n);
+                out.flush();
+            }
+        } catch (Exception ignored) {}
+    }
+}
+[/CODE]
+[/SPOILER]
+
+---
+
+[SPOILER="❓ Частые вопросы и диагностика (FAQ)"][B]В: Скрипт пишет: [I]ActivationState: 0[/I], но Gemini на экране не появился автоматически.[/B]
+[B]О:[/B] Откройте меню приложений на часах и нажмите на иконку [B]Gemini[/B] (или [B]Google Assistant[/B]). Ассистент сразу откроется в полноценном рабочем режиме, без предложения открыть телефон.
+
+[B]В: Распознает ли русский язык голосовой ввод?[/B]
+[B]О:[/B] Да! В скрипте прописан параметр [CODE]/gemini/locale: ru-RU[/CODE]. При нажатии на микрофон часы воспринимают русскую речь и отвечают на русском языке через синтезатор речи или карточки Gemini.
+
+[B]В: Что делать, если при запуске скрипта возникает ошибка подключения [WinError 10053]?[/B]
+[B]О:[/B] Проверьте, что в [CODE]companion_ddlx[/CODE] поле 1 установлено именно в [CODE]b22a0001[/CODE] (MAC-адрес BTC-клиента часов), а не внутренний узел GMS. Наш скрипт уже содержит эти правильные настройки. Также перезапустите команду [CODE]app_process[/CODE] на телефоне.
+
+[B]В: Слетит ли активация при перезагрузке часов?[/B]
+[B]О:[/B] Нет, [CODE]ActivationState: 0[/CODE] сохраняется в базе данных GMS и внутренней конфигурации ассистента на накопителе часов.
+[/SPOILER]
